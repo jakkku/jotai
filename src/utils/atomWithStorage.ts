@@ -263,3 +263,89 @@ export function atomWithHash<Value>(
 
   return atomWithStorage(key, initialValue, hashStorage)
 }
+
+// atomWithSearch is implemented with atomWithStorage
+
+export function atomWithSearch<Value>(
+  key: string,
+  initialValue: Value,
+  options?: {
+    serialize?: (val: Value) => string
+    deserialize?: (str: string | null) => Value | typeof NO_STORAGE_VALUE
+    delayInit?: boolean
+    replaceState?: boolean
+    subscribe?: (callback: () => void) => () => void
+  }
+): WritableAtom<Value, SetStateActionWithReset<Value>> {
+  const serialize = options?.serialize || JSON.stringify
+  const deserialize =
+    options?.deserialize ||
+    ((str) => {
+      try {
+        return JSON.parse(str || '')
+      } catch {
+        return NO_STORAGE_VALUE
+      }
+    })
+  const subscribe =
+    options?.subscribe ||
+    ((callback) => {
+      window.addEventListener('popstate', callback)
+      return () => {
+        window.removeEventListener('popstate', callback)
+      }
+    })
+  const searchStorage: SyncStorage<Value> = {
+    getItem: (key) => {
+      if (typeof location === 'undefined') {
+        return NO_STORAGE_VALUE
+      }
+      const searchParams = new URLSearchParams(location.search)
+      const storedValue = searchParams.get(key)
+      return deserialize(storedValue)
+    },
+    setItem: (key, newValue) => {
+      const searchParams = new URLSearchParams(location.search)
+      searchParams.set(key, serialize(newValue))
+
+      const changeHistorySearch = options?.replaceState
+        ? history.replaceState
+        : history.pushState
+
+      changeHistorySearch(
+        null,
+        '',
+        location.pathname + '?' + searchParams.toString() + location.hash
+      )
+    },
+    removeItem: (key) => {
+      const searchParams = new URLSearchParams(location.search)
+      searchParams.delete(key)
+
+      const changeHistorySearch = options?.replaceState
+        ? history.replaceState
+        : history.pushState
+
+      changeHistorySearch(
+        null,
+        '',
+        location.pathname + '?' + searchParams.toString() + location.hash
+      )
+    },
+    ...(options?.delayInit && { delayInit: true }),
+    subscribe: (key, setValue) => {
+      const callback = () => {
+        const searchParams = new URLSearchParams(location.search)
+        const str = searchParams.get(key)
+        if (str !== null) {
+          setValue(deserialize(str))
+        } else {
+          setValue(initialValue)
+        }
+      }
+      return subscribe(callback)
+    },
+  }
+
+  return atomWithStorage(key, initialValue, searchStorage)
+}
